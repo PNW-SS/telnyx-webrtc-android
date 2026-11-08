@@ -1127,6 +1127,7 @@ internal class Peer(
             tag = "SDP",
             message = "[Remote Offer/Answer SDP Received]:\n${sessionDescription.description}"
         )
+        val remoteDescription = takeDtlsServerRole(sessionDescription)
         peerConnection?.setRemoteDescription(
             object : SdpObserver {
                 override fun onSetFailure(p0: String?) {
@@ -1162,8 +1163,27 @@ internal class Peer(
                     client.onRemoteSessionErrorReceived(p0)
                 }
             },
-            sessionDescription
+            remoteDescription
         )
+    }
+
+    /**
+     * Waveline patch: when a remote offer leaves the DTLS role open
+     * (a=setup:actpass), sets it to active, so the answer WebRTC creates takes
+     * the passive (DTLS server) role and the gateway starts the handshake, as it
+     * does on outgoing calls. As the DTLS client, incoming calls stayed silent
+     * for 0.5-19 s after ICE connected: the gateway left the ClientHello
+     * unanswered while WebRTC's retransmissions backed off.
+     * @param sessionDescription, the remote [SessionDescription] as received.
+     * @return the description to set, changed only for such an offer.
+     */
+    private fun takeDtlsServerRole(sessionDescription: SessionDescription): SessionDescription {
+        val sdp = sessionDescription.description
+        if (sessionDescription.type != SessionDescription.Type.OFFER || !sdp.contains("a=setup:actpass")) {
+            return sessionDescription
+        }
+        Logger.d(tag = "SDP", message = "Remote offer a=setup:actpass set to active: answering as DTLS server")
+        return SessionDescription(sessionDescription.type, sdp.replace("a=setup:actpass", "a=setup:active"))
     }
 
     /**
