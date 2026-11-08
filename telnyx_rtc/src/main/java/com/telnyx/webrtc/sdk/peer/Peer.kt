@@ -93,6 +93,8 @@ internal class Peer(
         private const val ENABLE_PREFETCH_CANDIDATES = 10
         private const val DISABLE_PREFETCH_CANDIDATES = 0
         private const val ICE_DIAG_TAG = "ICE_DIAG"
+        // PeerConnectionFactory.Options.ADAPTER_TYPE_LOOPBACK, which org.webrtc keeps package-private.
+        private const val ADAPTER_TYPE_LOOPBACK = 1 shl 4
         private const val ICE_CANDIDATE_MIN_PARTS = 8
         private const val ICE_CANDIDATE_TRANSPORT_INDEX = 2
         private const val ICE_CANDIDATE_ADDRESS_INDEX = 4
@@ -220,6 +222,12 @@ internal class Peer(
                     PeerConnectionFactory.Options().apply {
                         disableEncryption = false
                         disableNetworkMonitor = true
+                        // Waveline patch: gather no loopback candidates, WebRTC's own default that
+                        // a zero mask turns off. On an incoming call the gateway sends to the first
+                        // answer candidate its wan.auto ACL allows, and that ACL allows 127.0.0.1,
+                        // listed before the public address: calls connected only once the gateway
+                        // learned the phone's real address, 1-19 s later or not at all.
+                        networkIgnoreMask = ADAPTER_TYPE_LOOPBACK
                     }
                 )
                 .createPeerConnectionFactory()
@@ -812,6 +820,9 @@ internal class Peer(
             bundlePolicy = PeerConnection.BundlePolicy.MAXCOMPAT
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             iceCandidatePoolSize = getIceCandidatePool()
+            // Waveline patch: while a cheaper network (Wi-Fi) works, gather no cellular
+            // candidates, so the gateway can't pick or latch onto a cellular address.
+            candidateNetworkPolicy = PeerConnection.CandidateNetworkPolicy.LOW_COST
 
             // Control local network access for ICE candidate gathering
             if (forceRelayCandidate) {
