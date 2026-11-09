@@ -88,6 +88,8 @@ internal class Peer(
         private const val AUDIO_LOCAL_TRACK_ID = "audio_local_track"
         private const val AUDIO_LOCAL_STREAM_ID = "audio_local_stream"
         private const val NEGOTIATION_TIMEOUT = 300L // 300ms timeout for negotiation
+        // Waveline patch: longest the negotiation timer waits for a srflx or relay candidate.
+        private const val NEGOTIATION_MAX_WAIT = 3000L
         private const val END_OF_CANDIDATES_TIMEOUT =
             3000L // 3 seconds timeout for end-of-candidates
         private const val ENABLE_PREFETCH_CANDIDATES = 10
@@ -302,6 +304,7 @@ internal class Peer(
     }
 
     private var lastCandidateTime = System.currentTimeMillis()
+    private var negotiationStartTime = 0L
     private var negotiationTimer: Timer? = null
     private var onNegotiationComplete: (() -> Unit)? = null
 
@@ -1324,18 +1327,35 @@ internal class Peer(
         negotiationTimer?.cancel()
         negotiationTimer?.purge()
 
+        negotiationStartTime = System.currentTimeMillis()
         negotiationTimer = Timer()
         negotiationTimer?.schedule(
             timerTask {
                 val currentTime = System.currentTimeMillis()
                 val timeSinceLastCandidate = currentTime - lastCandidateTime
+                // Waveline patch: the SDP must also carry a srflx or relay candidate, as the
+                // invite's timer requires, unless NEGOTIATION_MAX_WAIT has passed. Telnyx's
+                // gateway drops host addresses (RFC 1918, 100.64.0.0/10), so without one the
+                // answer gives it nothing to send to. The 300 ms quiet window alone let the
+                // answer go out before a slow STUN reply.
+                val localSdp = getLocalDescription()?.description.orEmpty()
+                val hasServerCandidate =
+                    localSdp.contains(" typ srflx") || localSdp.contains(" typ relay")
+                val waitedMax = currentTime - negotiationStartTime >= NEGOTIATION_MAX_WAIT
 
                 Logger.d(
                     tag = "NegotiationTimer",
-                    message = "Time since last candidate: ${timeSinceLastCandidate}ms"
+                    message = "Time since last candidate: ${timeSinceLastCandidate}ms, " +
+                        "server candidate: $hasServerCandidate"
                 )
 
-                if (timeSinceLastCandidate >= NEGOTIATION_TIMEOUT) {
+                if (timeSinceLastCandidate >= NEGOTIATION_TIMEOUT && (hasServerCandidate || waitedMax)) {
+                    if (!hasServerCandidate) {
+                        Logger.w(
+                            tag = "NegotiationTimer",
+                            message = "No srflx or relay candidate after ${NEGOTIATION_MAX_WAIT}ms"
+                        )
+                    }
                     Logger.d(
                         tag = "NegotiationTimer",
                         message = "Negotiation timeout reached - Invoking onNegotiationComplete"
