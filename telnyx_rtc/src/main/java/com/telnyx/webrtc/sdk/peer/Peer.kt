@@ -714,6 +714,9 @@ internal class Peer(
                 } else {
                     // Traditional ICE: Only process if call is not ACTIVE or RENEGOTIATING yet
                     val currentCallState = client.calls[callId]?.callStateFlow?.value
+                    // Waveline patch: the negotiation timer counts every candidate, including ones
+                    // gathered while the call is ACTIVE, which a reattach answer waits for.
+                    lastCandidateTime = System.currentTimeMillis()
 
                     // Allow ICE candidates when:
                     // 1. Call is NOT active (for initial invites/answers)
@@ -724,7 +727,6 @@ internal class Peer(
                         peerConnection?.addIceCandidate(it)
                         Logger.d(tag = "Observer", message = "ICE candidate added: $it")
                         onIceCandidateAdd?.invoke(it.serverUrl)
-                        lastCandidateTime = System.currentTimeMillis()
                     } else {
                         Logger.d(
                             tag = "Observer",

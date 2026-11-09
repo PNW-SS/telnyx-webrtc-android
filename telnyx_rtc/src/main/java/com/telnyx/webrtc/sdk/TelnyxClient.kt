@@ -3956,13 +3956,17 @@ class TelnyxClient private constructor(
             // Using default codec order during call recovery
             peerConnection?.answer(AppSdpObserver())
 
-            val iceCandidateTimer = Timer()
-            iceCandidateTimer.schedule(
-                timerTask {
-                    acceptReattachCall(callId, callerNumber)
-                },
-                Call.ICE_CANDIDATE_DELAY
-            )
+            // Waveline patch: send the reattach answer once ICE gathering goes quiet, as the first
+            // answer does, not after a fixed 400 ms. After a network change the phone's public
+            // address isn't known that soon, so the answer carried only host candidates, which
+            // Telnyx's gateway drops (RFC 1918, 100.64.0.0/10), and the call never connected.
+            peerConnection?.let { peer ->
+                peer.firstCandidateDeferred.invokeOnCompletion { cause ->
+                    if (cause == null) {
+                        peer.setOnNegotiationComplete { acceptReattachCall(callId, callerNumber) }
+                    }
+                }
+            }
             calls[this.callId]?.updateCallState(CallState.ACTIVE)
             this.updateCallState(calls[this.callId]?.callStateFlow?.value ?: CallState.ACTIVE)
             calls[this.callId] = this.apply {
