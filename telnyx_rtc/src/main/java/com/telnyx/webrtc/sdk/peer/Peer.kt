@@ -44,6 +44,8 @@ import com.telnyx.webrtc.lib.MediaConstraints
 import com.telnyx.webrtc.lib.MediaStream
 import com.telnyx.webrtc.lib.PeerConnection
 import com.telnyx.webrtc.lib.PeerConnectionFactory
+import com.telnyx.webrtc.lib.Priority
+import com.telnyx.webrtc.lib.RtpSender
 import com.telnyx.webrtc.lib.SdpObserver
 import com.telnyx.webrtc.lib.SessionDescription
 import com.telnyx.webrtc.lib.RtpTransceiver
@@ -828,6 +830,10 @@ internal class Peer(
             // Waveline patch: while a cheaper network (Wi-Fi) works, gather no cellular
             // candidates, so the gateway can't pick or latch onto a cellular address.
             candidateNetworkPolicy = PeerConnection.CandidateNetworkPolicy.LOW_COST
+            // Waveline patch: let WebRTC set DSCP marks on its packets, as the Twilio Voice
+            // SDK does (enableDscp). The audio sender's network priority picks the mark
+            // (raiseAudioNetworkPriority).
+            enableDscp = true
 
             // Control local network access for ICE candidate gathering
             if (forceRelayCandidate) {
@@ -929,11 +935,32 @@ internal class Peer(
 
         val localStream = peerConnectionFactory.createLocalMediaStream(AUDIO_LOCAL_STREAM_ID)
         localStream.addTrack(localAudioTrack)
-        peerConnection?.addTrack(localAudioTrack)
+        peerConnection?.addTrack(localAudioTrack)?.let { raiseAudioNetworkPriority(it) }
         CallTimingBenchmark.mark("media_stream_acquired")
         
         // Mark media devices acquired milestone
         client.latencyTracker.markMediaDevicesAcquired(callId)
+    }
+
+    /**
+     * Waveline patch: marks the call's audio DSCP Expedited Forwarding (46), as the Twilio
+     * Voice SDK does. With [PeerConnection.RTCConfiguration.enableDscp] on, WebRTC marks an
+     * audio sender EF only at MEDIUM or HIGH network priority; the default, LOW, leaves the
+     * packets unmarked. Before negotiation the sender keeps these parameters and applies them
+     * once it has its SSRC, so it covers the invite, the answer and a reattach's new peer.
+     */
+    private fun raiseAudioNetworkPriority(sender: RtpSender) {
+        val parameters = sender.parameters
+        if (parameters.encodings.isEmpty()) {
+            Logger.w(tag = "Peer:Audio", message = "Audio sender has no encodings; packets stay unmarked.")
+            return
+        }
+        parameters.encodings.forEach { it.networkPriority = Priority.HIGH }
+        if (!sender.setParameters(parameters)) {
+            Logger.w(tag = "Peer:Audio", message = "Audio sender refused network priority HIGH; packets stay unmarked.")
+            return
+        }
+        Logger.d(tag = "Peer:Audio", message = "Audio sender network priority HIGH (DSCP EF).")
     }
 
     /**
