@@ -1360,20 +1360,19 @@ internal class Peer(
             timerTask {
                 val currentTime = System.currentTimeMillis()
                 val timeSinceLastCandidate = currentTime - lastCandidateTime
-                // Waveline patch: the SDP must also carry a srflx or relay candidate, as the
-                // invite's timer requires, unless NEGOTIATION_MAX_WAIT has passed. Telnyx's
-                // gateway drops host addresses (RFC 1918, 100.64.0.0/10), so without one the
-                // answer gives it nothing to send to. The 300 ms quiet window alone let the
-                // answer go out before a slow STUN reply.
+                // Waveline patch: the SDP's audio line must also carry a srflx or relay
+                // candidate, as the invite's timer requires, unless NEGOTIATION_MAX_WAIT has
+                // passed. Telnyx's gateway drops host addresses (RFC 1918, 100.64.0.0/10), so
+                // without one the answer gives it nothing to send to. The 300 ms quiet window
+                // alone let the answer go out before a slow STUN reply.
                 val localSdp = getLocalDescription()?.description.orEmpty()
-                val hasServerCandidate =
-                    localSdp.contains(" typ srflx") || localSdp.contains(" typ relay")
+                val hasServerCandidate = audioHasServerCandidate(localSdp)
                 val waitedMax = currentTime - negotiationStartTime >= NEGOTIATION_MAX_WAIT
 
                 Logger.d(
                     tag = "NegotiationTimer",
                     message = "Time since last candidate: ${timeSinceLastCandidate}ms, " +
-                        "server candidate: $hasServerCandidate"
+                        "audio server candidate: $hasServerCandidate"
                 )
 
                 if (timeSinceLastCandidate >= NEGOTIATION_TIMEOUT && (hasServerCandidate || waitedMax)) {
@@ -1393,6 +1392,18 @@ internal class Peer(
             },
             NEGOTIATION_TIMEOUT, NEGOTIATION_TIMEOUT
         )
+    }
+
+    /**
+     * Waveline patch: whether the audio m-line of [sdp] carries a srflx or relay candidate.
+     * Telnyx's offers carry an audio and a video m-line, and under BUNDLE MAXCOMPAT each
+     * gathers its own candidates. A srflx on the video line alone passed a whole-SDP check
+     * while the audio line had only host addresses, and a reattached call got no audio
+     * (Pixel 7 Pro, 2026-11-09). An SDP without an audio line is checked as a whole.
+     */
+    private fun audioHasServerCandidate(sdp: String): Boolean {
+        val audio = sdp.split("\nm=").firstOrNull { it.startsWith("audio ") } ?: sdp
+        return audio.contains(" typ srflx") || audio.contains(" typ relay")
     }
 
     /**
