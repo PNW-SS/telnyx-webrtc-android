@@ -280,6 +280,16 @@ class TelnyxClient private constructor(
         context.getSystemService(AppCompatActivity.AUDIO_SERVICE) as? AudioManager
 
     /**
+     * Waveline patch: false when the app owns the call's audio mode and route (for example
+     * Android's Telecom, through Core-Telecom). The SDK then never sets AudioManager's mode or
+     * the speakerphone on its own: not MODE_RINGTONE with the speaker on at an incoming INVITE,
+     * not the speakerphone at answer, and not MODE_IN_COMMUNICATION whenever its media player
+     * stops, which includes every hangup. [setAudioOutputDevice] and
+     * [Call.onLoudSpeakerPressed], which an app calls itself, still change them.
+     */
+    var managesAudioMode: Boolean = true
+
+    /**
      * Helper function to emit socket response to both SharedFlow and deprecated LiveData
      * for backward compatibility during the migration period.
      */
@@ -2677,8 +2687,11 @@ class TelnyxClient private constructor(
         }
 
         // set audioManager to ringtone settings
-        audioManager?.mode = AudioManager.MODE_RINGTONE
-        audioManager?.isSpeakerphoneOn = true
+        // Waveline patch: only while the SDK owns the audio mode (managesAudioMode).
+        if (managesAudioMode) {
+            audioManager?.mode = AudioManager.MODE_RINGTONE
+            audioManager?.isSpeakerphoneOn = true
+        }
 
         rawRingtone?.let {
             stopMediaPlayer()
@@ -2710,6 +2723,8 @@ class TelnyxClient private constructor(
     }
 
     private fun setSpeakerMode(speakerMode: SpeakerMode) {
+        // Waveline patch: only while the SDK owns the audio route (managesAudioMode).
+        if (!managesAudioMode) return
         when (speakerMode) {
             SPEAKER -> {
                 audioManager?.isSpeakerphoneOn = true
@@ -2779,7 +2794,10 @@ class TelnyxClient private constructor(
         Logger.d(message = "ringtone/ringback media player stopped and released")
 
         // reset audio mode to communication
-        audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+        // Waveline patch: only while the SDK owns the audio mode (managesAudioMode).
+        if (managesAudioMode) {
+            audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
+        }
     }
 
     private fun requestGatewayStatus() {
